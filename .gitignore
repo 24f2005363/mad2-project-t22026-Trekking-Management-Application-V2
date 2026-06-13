@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Database
+*.sqlite
+*.db
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Redis/Celery
+celerybeat-schedule
+*.log
+
+# Frontend dependencies
+node_modules/
+dist/
+
+# IDE files
+.idea/
+.vscode/
+.gemini/
+unpacked_reference/
+trekking-app-mad2-wrong.zip
