@@ -7,10 +7,10 @@ def init_database():
     app = Flask(__name__)
     
     # Inline configuration to avoid external file dependencies in this milestone
-    app.config["SECRET_KEY"] = "student_trek_secret_key"
+    app.config["SECRET_KEY"] = "private_trekker_portal_key"
     app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///trek.db"
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-    app.config["SECURITY_PASSWORD_SALT"] = "student_salt_key_value"
+    app.config["SECURITY_PASSWORD_SALT"] = "private_trekker_portal_salt"
     app.config["SECURITY_PASSWORD_HASH"] = "bcrypt"
     app.config["WTF_CSRF_ENABLED"] = False
 
