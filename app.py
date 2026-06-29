@@ -490,6 +490,167 @@ def delete_client_account(client_id):
     db.session.commit()
     return jsonify({"message": "Client deleted"})
 
+# Staff module endpoints
+@app.route("/api/staff-panel/summary")
+@roles_required("staff")
+def staff_home_data():
+    u = check_user_session()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    staff_prof = StaffInfo.query.filter_by(user_id=u.id).first()
+    if not staff_prof:
+        return jsonify({"error": "No staff profile"}), 404
+    my_treks = Trek.query.filter_by(staff_id=staff_prof.id).all()
+    total_treks = len(my_treks)
+    total_parts = 0
+    live_count = 0
+    for t in my_treks:
+        cnt = Booking.query.filter_by(trek_id=t.id).count()
+        total_parts = total_parts + cnt
+        if t.status == "Ongoing":
+            live_count = live_count + 1
+    return jsonify({
+        "assigned_count": total_treks,
+        "participant_count": total_parts,
+        "active_treks": live_count,
+        "staff_name": u.name
+    })
+
+@app.route("/api/staff-panel/routes")
+@roles_required("staff")
+def staff_route_list():
+    u = check_user_session()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    staff_prof = StaffInfo.query.filter_by(user_id=u.id).first()
+    if not staff_prof:
+        return jsonify({"error": "No staff profile"}), 404
+    my_treks = Trek.query.filter_by(staff_id=staff_prof.id).all()
+    out = []
+    for t in my_treks:
+        reg_count = Booking.query.filter_by(trek_id=t.id).count()
+        out.append({
+            "id": t.id,
+            "title": t.title,
+            "place": t.place,
+            "level": t.level,
+            "duration": t.duration,
+            "max_slots": t.max_slots,
+            "left_slots": t.left_slots,
+            "status": t.status,
+            "start_date": str(t.start_date),
+            "end_date": str(t.end_date),
+            "registered": reg_count
+        })
+    return jsonify(out)
+
+@app.route("/api/staff-panel/routes/<int:route_id>")
+@roles_required("staff")
+def staff_route_detail(route_id):
+    u = check_user_session()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    staff_prof = StaffInfo.query.filter_by(user_id=u.id).first()
+    if not staff_prof:
+        return jsonify({"error": "No staff profile"}), 404
+    t = Trek.query.filter_by(id=route_id, staff_id=staff_prof.id).first()
+    if not t:
+        return jsonify({"error": "Trek not found or not assigned to you"}), 404
+    part_list = []
+    all_bookings = Booking.query.filter_by(trek_id=t.id).all()
+    for b in all_bookings:
+        part_list.append({
+            "book_id": b.id,
+            "user_name": b.user.name if b.user else "Unknown",
+            "email": b.user.email if b.user else "",
+            "phone": b.user.mobile if b.user else "",
+            "slots": b.qty,
+            "book_status": b.status,
+            "pay_status": b.pay_status
+        })
+    return jsonify({
+        "id": t.id,
+        "title": t.title,
+        "place": t.place,
+        "level": t.level,
+        "duration": t.duration,
+        "max_slots": t.max_slots,
+        "left_slots": t.left_slots,
+        "status": t.status,
+        "start_date": str(t.start_date),
+        "end_date": str(t.end_date),
+        "about": t.about,
+        "participants": part_list
+    })
+
+@app.route("/api/staff-panel/routes/<int:route_id>/change-status", methods=["POST"])
+@roles_required("staff")
+def staff_update_route_state(route_id):
+    u = check_user_session()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    staff_prof = StaffInfo.query.filter_by(user_id=u.id).first()
+    if not staff_prof:
+        return jsonify({"error": "No staff profile"}), 404
+    t = Trek.query.filter_by(id=route_id, staff_id=staff_prof.id).first()
+    if not t:
+        return jsonify({"error": "Trek not found or not assigned"}), 404
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "json body needed"}), 400
+    new_st = data.get("status")
+    allowed_list = ["Open", "Closed", "Ongoing"]
+    if new_st not in allowed_list:
+        return jsonify({"error": "Status not allowed"}), 400
+    t.status = new_st
+    db.session.commit()
+    return jsonify({"message": "Status changed", "new_status": t.status})
+
+@app.route("/api/staff-panel/routes/<int:route_id>/adjust-slots", methods=["POST"])
+@roles_required("staff")
+def staff_update_slots(route_id):
+    u = check_user_session()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    staff_prof = StaffInfo.query.filter_by(user_id=u.id).first()
+    if not staff_prof:
+        return jsonify({"error": "No staff profile"}), 404
+    t = Trek.query.filter_by(id=route_id, staff_id=staff_prof.id).first()
+    if not t:
+        return jsonify({"error": "Trek not found or not assigned"}), 404
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "json body needed"}), 400
+    new_slots = data.get("slots")
+    if new_slots is None:
+        return jsonify({"error": "Send slots value"}), 400
+    if int(new_slots) > t.max_slots:
+        return jsonify({"error": "Cannot exceed max slots"}), 400
+    if int(new_slots) < 0:
+        return jsonify({"error": "Slots cannot be negative"}), 400
+    t.left_slots = int(new_slots)
+    db.session.commit()
+    return jsonify({"message": "Slots updated", "left_slots": t.left_slots})
+
+@app.route("/api/staff-panel/routes/<int:route_id>/mark-done", methods=["POST"])
+@roles_required("staff")
+def staff_finish_trek(route_id):
+    u = check_user_session()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    staff_prof = StaffInfo.query.filter_by(user_id=u.id).first()
+    if not staff_prof:
+        return jsonify({"error": "No staff profile"}), 404
+    t = Trek.query.filter_by(id=route_id, staff_id=staff_prof.id).first()
+    if not t:
+        return jsonify({"error": "Trek not found or not assigned"}), 404
+    t.status = "Completed"
+    active_bookings = Booking.query.filter_by(trek_id=t.id, status="Booked").all()
+    for b in active_bookings:
+        b.status = "Completed"
+    db.session.commit()
+    return jsonify({"message": "Trek completed", "bookings_updated": len(active_bookings)})
+
 @app.route("/api/adm-bookings/all")
 @roles_required("admin")
 def get_all_client_bookings():
