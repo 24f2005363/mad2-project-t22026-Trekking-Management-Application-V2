@@ -651,6 +651,244 @@ def staff_finish_trek(route_id):
     db.session.commit()
     return jsonify({"message": "Trek completed", "bookings_updated": len(active_bookings)})
 
+# Trekker module endpoints
+@app.route("/api/trekker/home")
+@roles_required("trekker")
+def trekker_home():
+    u = check_user_session()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    open_treks = Trek.query.filter(Trek.status == "Open", Trek.left_slots > 0).all()
+    route_list = []
+    for t in open_treks:
+        route_list.append({
+            "id": t.id,
+            "title": t.title,
+            "place": t.place,
+            "level": t.level,
+            "duration": t.duration,
+            "left_slots": t.left_slots,
+            "max_slots": t.max_slots,
+            "start_date": str(t.start_date),
+            "end_date": str(t.end_date)
+        })
+    my_reservations = Booking.query.filter_by(user_id=u.id).all()
+    trip_list = []
+    for b in my_reservations:
+        trip_list.append({
+            "book_id": b.id,
+            "trek_title": b.trek.title if b.trek else "",
+            "start_date": str(b.trek.start_date) if b.trek else "",
+            "end_date": str(b.trek.end_date) if b.trek else "",
+            "slots_booked": b.qty,
+            "status": b.status,
+            "pay_status": b.pay_status
+        })
+    return jsonify({
+        "open_routes": route_list,
+        "my_trips": trip_list,
+        "user_name": u.name
+    })
+
+@app.route("/api/trekker/explore")
+@roles_required("trekker")
+def trekker_explore():
+    q = Trek.query.filter(Trek.status == "Open", Trek.left_slots > 0)
+    diff_filter = request.args.get("difficulty")
+    place_filter = request.args.get("location")
+    dur_filter = request.args.get("duration")
+    if diff_filter and diff_filter != "All":
+        q = q.filter(Trek.level == diff_filter)
+    if place_filter and place_filter != "All":
+        q = q.filter(Trek.place.ilike("%" + place_filter + "%"))
+    if dur_filter and dur_filter != "All":
+        q = q.filter(Trek.duration == int(dur_filter))
+    results = q.all()
+    out = []
+    for t in results:
+        out.append({
+            "id": t.id,
+            "title": t.title,
+            "place": t.place,
+            "level": t.level,
+            "duration": t.duration,
+            "left_slots": t.left_slots,
+            "max_slots": t.max_slots,
+            "start_date": str(t.start_date),
+            "end_date": str(t.end_date),
+            "about": t.about
+        })
+    return jsonify(out)
+
+@app.route("/api/trekker/treks/<int:route_id>")
+@roles_required("trekker")
+def trekker_route_view(route_id):
+    t = db.session.get(Trek, route_id)
+    if not t:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify({
+        "id": t.id,
+        "title": t.title,
+        "place": t.place,
+        "level": t.level,
+        "duration": t.duration,
+        "left_slots": t.left_slots,
+        "max_slots": t.max_slots,
+        "status": t.status,
+        "start_date": str(t.start_date),
+        "end_date": str(t.end_date),
+        "about": t.about
+    })
+
+@app.route("/api/trekker/reserve", methods=["POST"])
+@roles_required("trekker")
+def trekker_make_reservation():
+    u = check_user_session()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "json body required"}), 400
+    route_id = data.get("trek_id")
+    seat_count = data.get("seats", 1)
+    if not route_id:
+        return jsonify({"error": "trek_id needed"}), 400
+    try:
+        seat_count = int(seat_count)
+    except:
+        return jsonify({"error": "seats must be a number"}), 400
+    if seat_count < 1:
+        return jsonify({"error": "At least 1 seat"}), 400
+    t = db.session.get(Trek, route_id)
+    if not t:
+        return jsonify({"error": "Trek not found"}), 404
+    if t.status != "Open":
+        return jsonify({"error": "Trek is not open for booking"}), 400
+    if t.left_slots < seat_count:
+        return jsonify({"error": "Not enough seats available"}), 400
+    existing = Booking.query.filter_by(user_id=u.id, trek_id=route_id).first()
+    if existing:
+        if existing.status == "Booked":
+            return jsonify({"error": "You already have a booking for this trek"}), 400
+        if existing.status == "Completed":
+            return jsonify({"error": "This trek is already completed"}), 400
+        if existing.status == "Cancelled":
+            existing.status = "Booked"
+            existing.qty = seat_count
+            existing.book_time = datetime.utcnow()
+            existing.cancel_time = None
+            existing.pay_status = "Paid"
+            t.left_slots = t.left_slots - seat_count
+            if t.left_slots == 0:
+                t.status = "Closed"
+            db.session.commit()
+            return jsonify({"message": "Re-booking successful", "book_id": existing.id, "slots": seat_count}), 201
+    booking = Booking(
+        user_id=u.id,
+        trek_id=route_id,
+        qty=seat_count,
+        status="Booked",
+        pay_status="Paid"
+    )
+    db.session.add(booking)
+    t.left_slots = t.left_slots - seat_count
+    if t.left_slots == 0:
+        t.status = "Closed"
+    db.session.commit()
+    return jsonify({"message": "Booking confirmed", "book_id": booking.id, "slots": seat_count}), 201
+
+@app.route("/api/trekker/my-trips")
+@roles_required("trekker")
+def trekker_my_trips():
+    u = check_user_session()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    bookings = Booking.query.filter_by(user_id=u.id).order_by(Booking.book_time.desc()).all()
+    out = []
+    for b in bookings:
+        out.append({
+            "book_id": b.id,
+            "trek_id": b.trek_id,
+            "trek_title": b.trek.title if b.trek else "",
+            "place": b.trek.place if b.trek else "",
+            "start_date": str(b.trek.start_date) if b.trek else "",
+            "end_date": str(b.trek.end_date) if b.trek else "",
+            "slots": b.qty,
+            "book_time": str(b.book_time),
+            "status": b.status,
+            "pay_status": b.pay_status,
+            "cancel_time": str(b.cancel_time) if b.cancel_time else None
+        })
+    return jsonify(out)
+
+@app.route("/api/trekker/cancel/<int:book_id>", methods=["POST"])
+@roles_required("trekker")
+def trekker_withdraw(book_id):
+    u = check_user_session()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    b = Booking.query.filter_by(id=book_id, user_id=u.id).first()
+    if not b:
+        return jsonify({"error": "Booking not found"}), 404
+    if b.status != "Booked":
+        return jsonify({"error": "Only active bookings can be cancelled"}), 400
+    b.status = "Cancelled"
+    b.cancel_time = datetime.utcnow()
+    t = db.session.get(Trek, b.trek_id)
+    if t:
+        t.left_slots = t.left_slots + b.qty
+        if t.status == "Closed" and t.left_slots > 0:
+            t.status = "Open"
+    db.session.commit()
+    return jsonify({"message": "Booking cancelled"})
+
+@app.route("/api/trekker/history")
+@roles_required("trekker")
+def trekker_past_trips():
+    u = check_user_session()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    bookings = Booking.query.filter_by(user_id=u.id).filter(
+        Booking.status.in_(["Completed", "Cancelled"])
+    ).order_by(Booking.book_time.desc()).all()
+    out = []
+    for b in bookings:
+        out.append({
+            "book_id": b.id,
+            "trek_title": b.trek.title if b.trek else "",
+            "place": b.trek.place if b.trek else "",
+            "start_date": str(b.trek.start_date) if b.trek else "",
+            "end_date": str(b.trek.end_date) if b.trek else "",
+            "slots": b.qty,
+            "status": b.status,
+            "book_time": str(b.book_time)
+        })
+    return jsonify(out)
+
+@app.route("/api/trekker/account", methods=["GET", "PUT"])
+@roles_required("trekker")
+def trekker_account():
+    u = check_user_session()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    if request.method == "GET":
+        return jsonify({
+            "name": u.name,
+            "email": u.email,
+            "mobile": u.mobile or ""
+        })
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "json body required"}), 400
+    new_name = data.get("name", "").strip()
+    new_mobile = data.get("mobile", "").strip()
+    if not new_name:
+        return jsonify({"error": "Name cannot be empty"}), 400
+    u.name = new_name
+    u.mobile = new_mobile
+    db.session.commit()
+    return jsonify({"message": "Profile updated", "name": u.name, "mobile": u.mobile})
+
 @app.route("/api/adm-bookings/all")
 @roles_required("admin")
 def get_all_client_bookings():

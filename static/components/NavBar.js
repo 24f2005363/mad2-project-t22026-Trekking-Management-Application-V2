@@ -41,7 +41,10 @@ export default {
                             <router-link class="nav-link" to="/staff">Staff Dashboard</router-link>
                         </li>
                         <li class="nav-item" v-if="currentRole === 'trekker'">
-                            <router-link class="nav-link" to="/trekker">Trekker Dashboard</router-link>
+                            <router-link class="nav-link" to="/trekker">Dashboard</router-link>
+                        </li>
+                        <li class="nav-item" v-if="currentRole === 'staff'">
+                            <router-link class="nav-link" to="/staff">Staff Panel</router-link>
                         </li>
                     </ul>
                     <div class="d-flex align-items-center" v-if="currentRole">
