@@ -27,3 +27,6 @@ dist/
 .gemini/
 unpacked_reference/
 trekking-app-mad2-wrong.zip
+
+# Agent config files
+.agents/
