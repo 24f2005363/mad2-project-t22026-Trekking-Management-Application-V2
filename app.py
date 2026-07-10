@@ -4,20 +4,16 @@ from flask_security import Security, SQLAlchemyUserDatastore, roles_required, cu
 from flask_security.utils import hash_password, verify_password, login_user, logout_user
 from models import db, User, Role, Trek, Booking, StaffInfo
 from sqlalchemy import or_
+from config import Config
+from celery_setup import make_celery
+from celery.result import AsyncResult
 
 app = Flask(__name__)
-
-# Basic student-like configs
-app.config["SECRET_KEY"] = "private_trekker_portal_key"
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///trek.db"
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["SECURITY_PASSWORD_SALT"] = "private_trekker_portal_salt"
-app.config["SECURITY_PASSWORD_HASH"] = "bcrypt"
-app.config["SECURITY_REGISTERABLE"] = False
-app.config["SECURITY_SEND_REGISTER_EMAIL"] = False
-app.config["WTF_CSRF_ENABLED"] = False
+app.config.from_object(Config)
 
 db.init_app(app)
+
+celery = make_celery(app)
 
 # Flask security datastore
 user_store = SQLAlchemyUserDatastore(db, User, Role)
@@ -908,5 +904,42 @@ def get_all_client_bookings():
         })
     return jsonify(out)
 
+# Task trigger endpoints
+@app.route("/api/tasks/trigger-reminder")
+@roles_required("admin")
+def trigger_daily_reminder():
+    from tasks import notify_upcoming_treks
+    job = notify_upcoming_treks.delay()
+    return jsonify({"message": "Reminder task started", "task_id": job.id})
+
+@app.route("/api/tasks/trigger-report")
+@roles_required("admin")
+def trigger_monthly_report():
+    from tasks import generate_monthly_summary
+    job = generate_monthly_summary.delay()
+    return jsonify({"message": "Report task started", "task_id": job.id})
+
+@app.route("/api/tasks/export-csv")
+@roles_required("trekker")
+def trigger_csv_export():
+    u = check_user_session()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    from tasks import write_bookings_csv
+    job = write_bookings_csv.delay(u.id)
+    return jsonify({"message": "CSV export started", "task_id": job.id}), 202
+
+@app.route("/api/tasks/status/<task_id>")
+def task_progress(task_id):
+    job = AsyncResult(task_id, app=celery)
+    return jsonify({
+        "task_id": job.id,
+        "state": job.state,
+        "result": job.result
+    })
+
 if __name__ == "__main__":
+    with app.app_context():
+        from models import db
+        db.create_all()
     app.run(debug=True)
