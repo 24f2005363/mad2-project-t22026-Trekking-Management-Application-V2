@@ -5,6 +5,7 @@ from flask_security.utils import hash_password, verify_password, login_user, log
 from models import db, User, Role, Trek, Booking, StaffInfo
 from sqlalchemy import or_
 from config import Config
+from redis_helper import cache
 from celery_setup import make_celery
 from celery.result import AsyncResult
 
@@ -12,6 +13,7 @@ app = Flask(__name__)
 app.config.from_object(Config)
 
 db.init_app(app)
+cache.init_app(app)
 
 celery = make_celery(app)
 
