@@ -5,9 +5,9 @@ from flask_security import UserMixin, RoleMixin
 
 db = SQLAlchemy()
 
-# Link table between users and roles
-user_role_link = db.Table(
-    "user_role_link",
+# Junction linking users to their roles
+role_assignments = db.Table(
+    "role_assignments",
     db.Column("user_id", db.Integer(), db.ForeignKey("user.id", ondelete="CASCADE"), primary_key=True),
     db.Column("role_id", db.Integer(), db.ForeignKey("role.id", ondelete="CASCADE"), primary_key=True)
 )
@@ -30,24 +30,24 @@ class User(db.Model, UserMixin):
 
     roles = db.relationship(
         "Role",
-        secondary=user_role_link,
-        backref=db.backref("users", lazy="dynamic")
+        secondary=role_assignments,
+        backref=db.backref("team_members", lazy="dynamic")
     )
 
-    profile = db.relationship(
+    staff_profile = db.relationship(
         "StaffInfo",
-        backref="user",
+        backref="staff_account",
         uselist=False,
-        cascade="all, delete-orphan",
-        passive_deletes=True
+        cascade="save-update, merge, delete",
+        passive_deletes=False
     )
 
-    my_bookings = db.relationship(
+    booking_records = db.relationship(
         "Booking",
-        backref="user",
-        lazy=True,
-        cascade="all, delete-orphan",
-        passive_deletes=True
+        backref="customer",
+        lazy="select",
+        cascade="save-update, merge, delete",
+        passive_deletes=False
     )
 
 class StaffInfo(db.Model):
@@ -59,11 +59,11 @@ class StaffInfo(db.Model):
     state = db.Column(db.String(50), default="Active")
     created = db.Column(db.DateTime, default=datetime.utcnow)
 
-    assigned_treks = db.relationship(
+    managed_treks = db.relationship(
         "Trek",
-        backref="assigned_staff",
-        lazy=True,
-        passive_deletes=True
+        backref="guide",
+        lazy="subquery",
+        passive_deletes=False
     )
 
 class Trek(db.Model):
@@ -81,12 +81,12 @@ class Trek(db.Model):
     staff_id = db.Column(db.Integer, db.ForeignKey("staff_info.id", ondelete="SET NULL"), nullable=True)
     created = db.Column(db.DateTime, default=datetime.utcnow)
 
-    bookings = db.relationship(
+    reservations = db.relationship(
         "Booking",
-        backref="trek",
-        lazy=True,
-        cascade="all, delete-orphan",
-        passive_deletes=True
+        backref="trip",
+        lazy="select",
+        cascade="save-update, merge, delete",
+        passive_deletes=False
     )
 
 class Booking(db.Model):
@@ -100,5 +100,5 @@ class Booking(db.Model):
     cancel_time = db.Column(db.DateTime, nullable=True)
 
     __table_args__ = (
-        db.UniqueConstraint("user_id", "trek_id", name="unique_user_trek"),
+        db.UniqueConstraint("user_id", "trek_id", name="uq_participant_trip"),
     )

@@ -23,14 +23,14 @@ def init_database():
                 user_store.create_role(name=role_name, desc=role_name + " role")
         db.session.commit()
 
-        admin_email = "admin@tma.com"
+        admin_email = "head@peakventure.com"
         existing_admin = user_store.find_user(email=admin_email)
         if not existing_admin:
             admin_user = user_store.create_user(
                 email=admin_email,
-                password=hash_password("admin123"),
-                name="Main Admin",
-                mobile="9999999999",
+                password=hash_password("peak@2026"),
+                name="Head Admin",
+                mobile="9876543210",
                 active=True
             )
             admin_role = user_store.find_role("admin")

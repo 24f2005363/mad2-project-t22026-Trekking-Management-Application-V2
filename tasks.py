@@ -15,8 +15,8 @@ def notify_upcoming_treks():
     count = 0
     logs = []
     for b in upcoming:
-        t = b.trek
-        u = b.user
+        t = b.trip
+        u = b.customer
         if t and u and t.start_date == tomorrow:
             msg = "Reminder: " + t.title + " starts tomorrow for " + u.name
             logs.append(msg)
@@ -92,11 +92,11 @@ def write_bookings_csv(person_id):
         for b in bookings:
             writer.writerow([
                 b.user_id,
-                b.trek.title if b.trek else "",
-                b.trek.place if b.trek else "",
+                b.trip.title if b.trip else "",
+                b.trip.place if b.trip else "",
                 b.status,
-                str(b.trek.start_date) if b.trek else "",
-                str(b.trek.end_date) if b.trek else ""
+                str(b.trip.start_date) if b.trip else "",
+                str(b.trip.end_date) if b.trip else ""
             ])
 
     return {

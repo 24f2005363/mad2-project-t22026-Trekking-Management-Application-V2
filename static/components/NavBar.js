@@ -43,13 +43,14 @@ export default {
                         <li class="nav-item" v-if="currentRole === 'trekker'">
                             <router-link class="nav-link" to="/trekker">Dashboard</router-link>
                         </li>
-                        <li class="nav-item" v-if="currentRole === 'staff'">
-                            <router-link class="nav-link" to="/staff">Staff Panel</router-link>
-                        </li>
                     </ul>
                     <div class="d-flex align-items-center" v-if="currentRole">
                         <span class="text-light me-3 small">Logged in as: {{ userName }} ({{ currentRole }})</span>
                         <button class="btn btn-outline-danger btn-sm" @click="logoutUser">Logout</button>
+                    </div>
+                    <div class="d-flex align-items-center" v-else>
+                        <router-link class="btn btn-outline-light btn-sm me-2" to="/">Login</router-link>
+                        <router-link class="btn btn-outline-info btn-sm" to="/register">Register</router-link>
                     </div>
                 </div>
             </div>

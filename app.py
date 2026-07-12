@@ -21,26 +21,26 @@ celery = make_celery(app)
 user_store = SQLAlchemyUserDatastore(db, User, Role)
 security = Security(app, user_store)
 
-# Helper to verify logged-in user
-def check_user_session():
+# Validate current session user from database
+def load_current_account():
     if not current_user.is_authenticated:
         return None
-    db_user = db.session.get(User, current_user.id)
-    if not db_user:
+    record = User.query.filter_by(id=current_user.id).first()
+    if record is None:
         logout_user()
         return None
-    if db_user.blacklisted or not db_user.active:
-        logout_user()
-        return None
-    return db_user
+    return record
 
 @app.before_request
-def check_active_user():
+def guard_inactive_sessions():
     if current_user.is_authenticated:
-        db_user = db.session.get(User, current_user.id)
-        if not db_user or db_user.blacklisted or not db_user.active:
+        record = User.query.filter_by(id=current_user.id).first()
+        if record is None:
             logout_user()
             return make_response(jsonify({"error": "invalid user session"}), 401)
+        if record.blacklisted or not record.active:
+            logout_user()
+            return make_response(jsonify({"error": "account disabled"}), 403)
 
 @app.route("/")
 def index_view():
@@ -123,7 +123,7 @@ def end_session():
 
 @app.route("/api/current-user")
 def get_active_profile():
-    u = check_user_session()
+    u = load_current_account()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
 
@@ -158,8 +158,8 @@ def get_trek_routes():
     out = []
     for t in all_treks:
         staff_name = None
-        if t.assigned_staff and t.assigned_staff.user:
-            staff_name = t.assigned_staff.user.name
+        if t.guide and t.guide.staff_account:
+            staff_name = t.guide.staff_account.name
         
         out.append({
             "id": t.id,
@@ -173,7 +173,7 @@ def get_trek_routes():
             "start_date": str(t.start_date),
             "end_date": str(t.end_date),
             "staff_id": t.staff_id,
-            "assigned_staff_name": staff_name
+            "guide_name": staff_name
         })
     return jsonify(out)
 
@@ -194,8 +194,8 @@ def search_trek_routes():
     out = []
     for t in matches:
         staff_name = None
-        if t.assigned_staff and t.assigned_staff.user:
-            staff_name = t.assigned_staff.user.name
+        if t.guide and t.guide.staff_account:
+            staff_name = t.guide.staff_account.name
         
         out.append({
             "id": t.id,
@@ -209,7 +209,7 @@ def search_trek_routes():
             "start_date": str(t.start_date),
             "end_date": str(t.end_date),
             "staff_id": t.staff_id,
-            "assigned_staff_name": staff_name
+            "guide_name": staff_name
         })
     return jsonify(out)
 
@@ -286,13 +286,13 @@ def get_guides_profiles():
         out.append({
             "guide_profile_id": g.id,
             "user_id": g.user_id,
-            "name": g.user.name,
-            "email": g.user.email,
+            "name": g.staff_account.name,
+            "email": g.staff_account.email,
             "info": g.info,
             "exp_years": g.exp_years,
             "skills": g.skills,
             "state": g.state,
-            "blacklisted": g.user.blacklisted
+            "blacklisted": g.staff_account.blacklisted
         })
     return jsonify(out)
 
@@ -315,13 +315,13 @@ def search_guides_profiles():
         out.append({
             "guide_profile_id": g.id,
             "user_id": g.user_id,
-            "name": g.user.name,
-            "email": g.user.email,
+            "name": g.staff_account.name,
+            "email": g.staff_account.email,
             "info": g.info,
             "exp_years": g.exp_years,
             "skills": g.skills,
             "state": g.state,
-            "blacklisted": g.user.blacklisted
+            "blacklisted": g.staff_account.blacklisted
         })
     return jsonify(out)
 
@@ -379,7 +379,7 @@ def assign_guide_to_route(guide_id, route_id):
     if not g or not t:
         return jsonify({"error": "Guide or Trek not found"}), 404
 
-    if g.user.blacklisted or g.state != "Active":
+    if g.staff_account.blacklisted or g.state != "Active":
         return jsonify({"error": "Selected guide is inactive or blocked"}), 400
 
     t.staff_id = g.id
@@ -393,7 +393,7 @@ def restrict_guide_account(guide_id):
     if not g:
         return jsonify({"error": "Guide not found"}), 404
 
-    g.user.blacklisted = True
+    g.staff_account.blacklisted = True
     g.state = "Inactive"
     db.session.commit()
     return jsonify({"message": "Guide has been blocked"})
@@ -405,7 +405,7 @@ def restore_guide_account(guide_id):
     if not g:
         return jsonify({"error": "Guide not found"}), 404
 
-    g.user.blacklisted = False
+    g.staff_account.blacklisted = False
     g.state = "Active"
     db.session.commit()
     return jsonify({"message": "Guide reactivated"})
@@ -492,7 +492,7 @@ def delete_client_account(client_id):
 @app.route("/api/staff-panel/summary")
 @roles_required("staff")
 def staff_home_data():
-    u = check_user_session()
+    u = load_current_account()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
     staff_prof = StaffInfo.query.filter_by(user_id=u.id).first()
@@ -517,7 +517,7 @@ def staff_home_data():
 @app.route("/api/staff-panel/routes")
 @roles_required("staff")
 def staff_route_list():
-    u = check_user_session()
+    u = load_current_account()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
     staff_prof = StaffInfo.query.filter_by(user_id=u.id).first()
@@ -545,7 +545,7 @@ def staff_route_list():
 @app.route("/api/staff-panel/routes/<int:route_id>")
 @roles_required("staff")
 def staff_route_detail(route_id):
-    u = check_user_session()
+    u = load_current_account()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
     staff_prof = StaffInfo.query.filter_by(user_id=u.id).first()
@@ -559,9 +559,9 @@ def staff_route_detail(route_id):
     for b in all_bookings:
         part_list.append({
             "book_id": b.id,
-            "user_name": b.user.name if b.user else "Unknown",
-            "email": b.user.email if b.user else "",
-            "phone": b.user.mobile if b.user else "",
+            "user_name": b.customer.name if b.customer else "Unknown",
+            "email": b.customer.email if b.customer else "",
+            "phone": b.customer.mobile if b.customer else "",
             "slots": b.qty,
             "book_status": b.status,
             "pay_status": b.pay_status
@@ -584,7 +584,7 @@ def staff_route_detail(route_id):
 @app.route("/api/staff-panel/routes/<int:route_id>/change-status", methods=["POST"])
 @roles_required("staff")
 def staff_update_route_state(route_id):
-    u = check_user_session()
+    u = load_current_account()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
     staff_prof = StaffInfo.query.filter_by(user_id=u.id).first()
@@ -607,7 +607,7 @@ def staff_update_route_state(route_id):
 @app.route("/api/staff-panel/routes/<int:route_id>/adjust-slots", methods=["POST"])
 @roles_required("staff")
 def staff_update_slots(route_id):
-    u = check_user_session()
+    u = load_current_account()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
     staff_prof = StaffInfo.query.filter_by(user_id=u.id).first()
@@ -633,7 +633,7 @@ def staff_update_slots(route_id):
 @app.route("/api/staff-panel/routes/<int:route_id>/mark-done", methods=["POST"])
 @roles_required("staff")
 def staff_finish_trek(route_id):
-    u = check_user_session()
+    u = load_current_account()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
     staff_prof = StaffInfo.query.filter_by(user_id=u.id).first()
@@ -653,7 +653,7 @@ def staff_finish_trek(route_id):
 @app.route("/api/trekker/home")
 @roles_required("trekker")
 def trekker_home():
-    u = check_user_session()
+    u = load_current_account()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
     open_treks = Trek.query.filter(Trek.status == "Open", Trek.left_slots > 0).all()
@@ -675,9 +675,9 @@ def trekker_home():
     for b in my_reservations:
         trip_list.append({
             "book_id": b.id,
-            "trek_title": b.trek.title if b.trek else "",
-            "start_date": str(b.trek.start_date) if b.trek else "",
-            "end_date": str(b.trek.end_date) if b.trek else "",
+            "trek_title": b.trip.title if b.trip else "",
+            "start_date": str(b.trip.start_date) if b.trip else "",
+            "end_date": str(b.trip.end_date) if b.trip else "",
             "slots_booked": b.qty,
             "status": b.status,
             "pay_status": b.pay_status
@@ -741,7 +741,7 @@ def trekker_route_view(route_id):
 @app.route("/api/trekker/reserve", methods=["POST"])
 @roles_required("trekker")
 def trekker_make_reservation():
-    u = check_user_session()
+    u = load_current_account()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
     data = request.get_json()
@@ -798,7 +798,7 @@ def trekker_make_reservation():
 @app.route("/api/trekker/my-trips")
 @roles_required("trekker")
 def trekker_my_trips():
-    u = check_user_session()
+    u = load_current_account()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
     bookings = Booking.query.filter_by(user_id=u.id).order_by(Booking.book_time.desc()).all()
@@ -807,10 +807,10 @@ def trekker_my_trips():
         out.append({
             "book_id": b.id,
             "trek_id": b.trek_id,
-            "trek_title": b.trek.title if b.trek else "",
-            "place": b.trek.place if b.trek else "",
-            "start_date": str(b.trek.start_date) if b.trek else "",
-            "end_date": str(b.trek.end_date) if b.trek else "",
+            "trek_title": b.trip.title if b.trip else "",
+            "place": b.trip.place if b.trip else "",
+            "start_date": str(b.trip.start_date) if b.trip else "",
+            "end_date": str(b.trip.end_date) if b.trip else "",
             "slots": b.qty,
             "book_time": str(b.book_time),
             "status": b.status,
@@ -822,7 +822,7 @@ def trekker_my_trips():
 @app.route("/api/trekker/cancel/<int:book_id>", methods=["POST"])
 @roles_required("trekker")
 def trekker_withdraw(book_id):
-    u = check_user_session()
+    u = load_current_account()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
     b = Booking.query.filter_by(id=book_id, user_id=u.id).first()
@@ -843,7 +843,7 @@ def trekker_withdraw(book_id):
 @app.route("/api/trekker/history")
 @roles_required("trekker")
 def trekker_past_trips():
-    u = check_user_session()
+    u = load_current_account()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
     bookings = Booking.query.filter_by(user_id=u.id).filter(
@@ -853,10 +853,10 @@ def trekker_past_trips():
     for b in bookings:
         out.append({
             "book_id": b.id,
-            "trek_title": b.trek.title if b.trek else "",
-            "place": b.trek.place if b.trek else "",
-            "start_date": str(b.trek.start_date) if b.trek else "",
-            "end_date": str(b.trek.end_date) if b.trek else "",
+            "trek_title": b.trip.title if b.trip else "",
+            "place": b.trip.place if b.trip else "",
+            "start_date": str(b.trip.start_date) if b.trip else "",
+            "end_date": str(b.trip.end_date) if b.trip else "",
             "slots": b.qty,
             "status": b.status,
             "book_time": str(b.book_time)
@@ -866,7 +866,7 @@ def trekker_past_trips():
 @app.route("/api/trekker/account", methods=["GET", "PUT"])
 @roles_required("trekker")
 def trekker_account():
-    u = check_user_session()
+    u = load_current_account()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
     if request.method == "GET":
@@ -896,9 +896,9 @@ def get_all_client_bookings():
         out.append({
             "id": b.id,
             "user_id": b.user_id,
-            "client_name": b.user.name if b.user else None,
+            "client_name": b.customer.name if b.customer else None,
             "trek_id": b.trek_id,
-            "trek_title": b.trek.title if b.trek else None,
+            "trek_title": b.trip.title if b.trip else None,
             "book_time": str(b.book_time),
             "status": b.status,
             "pay_status": b.pay_status,
@@ -924,7 +924,7 @@ def trigger_monthly_report():
 @app.route("/api/tasks/export-csv")
 @roles_required("trekker")
 def trigger_csv_export():
-    u = check_user_session()
+    u = load_current_account()
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
     from tasks import write_bookings_csv
@@ -942,6 +942,28 @@ def task_progress(task_id):
 
 if __name__ == "__main__":
     with app.app_context():
-        from models import db
+        from models import db, User, Role
         db.create_all()
+
+        roles_list = ["admin", "staff", "trekker"]
+        for role_name in roles_list:
+            existing_role = user_store.find_role(role_name)
+            if not existing_role:
+                user_store.create_role(name=role_name, desc=role_name + " role")
+        db.session.commit()
+
+        admin_email = "head@peakventure.com"
+        existing_admin = user_store.find_user(email=admin_email)
+        if not existing_admin:
+            admin_user = user_store.create_user(
+                email=admin_email,
+                password=hash_password("peak@2026"),
+                name="Head Admin",
+                mobile="9876543210",
+                active=True
+            )
+            admin_role = user_store.find_role("admin")
+            user_store.add_role_to_user(admin_user, admin_role)
+            db.session.commit()
+            print("Default admin seeded: head@peakventure.com / peak@2026")
     app.run(debug=True)

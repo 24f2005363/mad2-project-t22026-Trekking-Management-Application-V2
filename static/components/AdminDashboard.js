@@ -421,7 +421,7 @@ export default {
                                         <td>{{ t.place }} <span class="badge bg-secondary">{{ t.level }}</span></td>
                                         <td>{{ t.left_slots }} / {{ t.max_slots }}</td>
                                         <td>
-                                            <span v-if="t.assigned_staff_name" class="badge bg-info text-dark">{{ t.assigned_staff_name }}</span>
+                                            <span v-if="t.guide_name" class="badge bg-info text-dark">{{ t.guide_name }}</span>
                                             <span v-else class="text-danger small">Unassigned</span>
                                             <button class="btn btn-link btn-sm d-block p-0" @click="openAssignModal(t.id)">Assign</button>
                                         </td>

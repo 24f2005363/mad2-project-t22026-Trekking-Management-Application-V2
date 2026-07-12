@@ -3,7 +3,7 @@ export default {
     data() {
         return {
             viewMode: "home",
-            userInfo: { name: "" },
+            userInfo: { name: "", email: "" },
             openRoutes: [],
             myReservations: [],
             selectedRoute: null,
