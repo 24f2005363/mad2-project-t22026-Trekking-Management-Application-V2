@@ -35,6 +35,6 @@ class Config:
     MAIL_SERVER = "smtp.gmail.com"
     MAIL_PORT = 587
     MAIL_USE_TLS = True
-    MAIL_USERNAME = "your-email@gmail.com"
-    MAIL_PASSWORD = "your-16-char-app-password"
-    MAIL_DEFAULT_SENDER = "your-email@gmail.com"
+    MAIL_USERNAME = "manishdamodara097@gmail.com"
+    MAIL_PASSWORD = "bxtd xktl jleb kafm"
+    MAIL_DEFAULT_SENDER = "manishdamodara097@gmail.com"
