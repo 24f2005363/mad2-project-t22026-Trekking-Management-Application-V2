@@ -1,5 +1,7 @@
+import os
+from functools import wraps
 from datetime import date, datetime
-from flask import Flask, jsonify, request, render_template, make_response
+from flask import Flask, jsonify, request, render_template, make_response, send_from_directory
 from flask_security import Security, SQLAlchemyUserDatastore, roles_required, current_user
 from flask_security.utils import hash_password, verify_password, login_user, logout_user
 from models import db, User, Role, Trek, Booking, StaffInfo
@@ -17,11 +19,26 @@ cache.init_app(app)
 
 celery = make_celery(app)
 
-# Flask security datastore
+# Wraps cache.cached() so if Redis goes down, we fallback to running the view normally.
+# Caching is a nice-to-have performance boost, but it shouldn't be a single point of failure.
+def safe_cached(timeout=30):
+    def decorator(fn):
+        cached_fn = cache.cached(timeout=timeout)(fn)
+
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return cached_fn(*args, **kwargs)
+            except Exception:
+                return fn(*args, **kwargs)
+        return wrapper
+    return decorator
+
+# Set up Flask-Security user datastore using SQLAlchemy
 user_store = SQLAlchemyUserDatastore(db, User, Role)
 security = Security(app, user_store)
 
-# Validate current session user from database
+# Verify that the currently logged-in user actually exists in the database
 def load_current_account():
     if not current_user.is_authenticated:
         return None
@@ -50,6 +67,40 @@ def auto_clear_cache(response):
         except Exception:
             pass
     return response
+
+# Intercept all errors and return them as JSON responses.
+# This prevents the frontend from crashing when trying to parse HTML error pages.
+@app.errorhandler(400)
+def handle_bad_request(e):
+    return jsonify({"error": "Bad request"}), 400
+
+@app.errorhandler(401)
+def handle_unauthorized(e):
+    return jsonify({"error": "Not authenticated"}), 401
+
+@app.errorhandler(403)
+def handle_forbidden(e):
+    return jsonify({"error": "Forbidden"}), 403
+
+@app.errorhandler(404)
+def handle_not_found(e):
+    return jsonify({"error": "Not found"}), 404
+
+@app.errorhandler(405)
+def handle_method_not_allowed(e):
+    return jsonify({"error": "Method not allowed"}), 405
+
+@app.errorhandler(415)
+def handle_bad_media_type(e):
+    return jsonify({"error": "Content-Type must be application/json"}), 415
+
+@app.errorhandler(Exception)
+def handle_uncaught_error(e):
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        return jsonify({"error": e.description}), e.code
+    app.logger.exception("Unhandled error")
+    return jsonify({"error": "Something went wrong on the server"}), 500
 
 @app.route("/")
 def index_view():
@@ -146,9 +197,9 @@ def get_active_profile():
 
 @app.route("/api/admin-stats")
 @roles_required("admin")
-@cache.cached(timeout=30)
+@safe_cached(timeout=30)
 def get_admin_panel_stats():
-    # count users with trekker and staff role
+    # Get counts for active trekkers, staff members, treks, and bookings
     clients_count = User.query.join(User.roles).filter(Role.name == "trekker").count()
     guides_count = User.query.join(User.roles).filter(Role.name == "staff").count()
     routes_count = Trek.query.count()
@@ -163,7 +214,7 @@ def get_admin_panel_stats():
 
 @app.route("/api/adm-treks/list", methods=["GET"])
 @roles_required("admin")
-@cache.cached(timeout=30)
+@safe_cached(timeout=30)
 def get_trek_routes():
     all_treks = Trek.query.all()
     out = []
@@ -249,6 +300,14 @@ def new_trek_route():
         max_slots = int(max_slots)
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid date format or numeric fields."}), 400
+
+    if duration <= 0:
+        return jsonify({"error": "Duration must be a positive number"}), 400
+    if max_slots <= 0:
+        return jsonify({"error": "Max slots must be a positive number"}), 400
+    if parsed_end < parsed_start:
+        return jsonify({"error": "End date cannot be before start date"}), 400
+
     new_t = Trek(
         title=title,
         place=place,
@@ -279,14 +338,19 @@ def edit_trek_route(route_id):
     if "level" in data: t.level = data["level"]
     if "duration" in data:
         try:
-            t.duration = int(data["duration"])
+            new_duration = int(data["duration"])
         except (ValueError, TypeError):
             return jsonify({"error": "Duration must be a number"}), 400
+        if new_duration <= 0:
+            return jsonify({"error": "Duration must be a positive number"}), 400
+        t.duration = new_duration
     if "max_slots" in data:
         try:
             new_max = int(data["max_slots"])
         except (ValueError, TypeError):
             return jsonify({"error": "Max slots must be a number"}), 400
+        if new_max <= 0:
+            return jsonify({"error": "Max slots must be a positive number"}), 400
         booked = t.max_slots - t.left_slots
         if new_max < booked:
             return jsonify({"error": "Cannot reduce max slots below " + str(booked) + " (already booked)"}), 400
@@ -296,14 +360,19 @@ def edit_trek_route(route_id):
     if "start_date" in data:
         try:
             t.start_date = date.fromisoformat(data["start_date"])
-        except ValueError:
+        except (ValueError, TypeError):
             return jsonify({"error": "Invalid start date format"}), 400
     if "end_date" in data:
         try:
             t.end_date = date.fromisoformat(data["end_date"])
-        except ValueError:
+        except (ValueError, TypeError):
             return jsonify({"error": "Invalid end date format"}), 400
     if "about" in data: t.about = data["about"]
+
+    if t.end_date < t.start_date:
+        db.session.rollback()
+        return jsonify({"error": "End date cannot be before start date"}), 400
+
     db.session.commit()
     return jsonify({"message": "Trek updated", "id": t.id})
 
@@ -339,7 +408,7 @@ def delete_trek_route(route_id):
 
 @app.route("/api/adm-guides/list", methods=["GET"])
 @roles_required("admin")
-@cache.cached(timeout=30)
+@safe_cached(timeout=30)
 def get_guides_profiles():
     guides = StaffInfo.query.all()
     out = []
@@ -475,7 +544,7 @@ def restore_guide_account(guide_id):
 
 @app.route("/api/adm-clients/list", methods=["GET"])
 @roles_required("admin")
-@cache.cached(timeout=30)
+@safe_cached(timeout=30)
 def get_clients_profiles():
     clients = User.query.join(User.roles).filter(Role.name == "trekker").all()
     out = []
@@ -552,7 +621,7 @@ def delete_client_account(client_id):
     db.session.commit()
     return jsonify({"message": "Client deleted"})
 
-# Staff module endpoints
+# API endpoints for staff dashboard features
 @app.route("/api/staff-panel/summary")
 @roles_required("staff")
 def staff_home_data():
@@ -567,8 +636,9 @@ def staff_home_data():
     total_parts = 0
     live_count = 0
     for t in my_treks:
-        cnt = Booking.query.filter_by(trek_id=t.id).count()
-        total_parts = total_parts + cnt
+        active_bookings = Booking.query.filter_by(trek_id=t.id, status="Booked").all()
+        for b in active_bookings:
+            total_parts = total_parts + b.qty
         if t.status == "Ongoing":
             live_count = live_count + 1
     return jsonify({
@@ -590,7 +660,8 @@ def staff_route_list():
     my_treks = Trek.query.filter_by(staff_id=staff_prof.id).all()
     out = []
     for t in my_treks:
-        reg_count = Booking.query.filter_by(trek_id=t.id).count()
+        active_bookings = Booking.query.filter_by(trek_id=t.id, status="Booked").all()
+        reg_count = sum(b.qty for b in active_bookings)
         out.append({
             "id": t.id,
             "title": t.title,
@@ -717,7 +788,7 @@ def staff_finish_trek(route_id):
     db.session.commit()
     return jsonify({"message": "Trek completed", "bookings_updated": len(active_bookings)})
 
-# Trekker module endpoints
+# API endpoints for trekker portal features
 @app.route("/api/trekker/home")
 @roles_required("trekker")
 def trekker_home():
@@ -792,7 +863,7 @@ def trekker_explore():
 
 @app.route("/api/trekker/treks/<int:route_id>")
 @roles_required("trekker")
-@cache.cached(timeout=30)
+@safe_cached(timeout=30)
 def trekker_route_view(route_id):
     t = db.session.get(Trek, route_id)
     if not t:
@@ -971,7 +1042,7 @@ def trekker_account():
 
 @app.route("/api/adm-bookings/all")
 @roles_required("admin")
-@cache.cached(timeout=30)
+@safe_cached(timeout=30)
 def get_all_client_bookings():
     bookings = Booking.query.all()
     out = []
@@ -989,7 +1060,7 @@ def get_all_client_bookings():
         })
     return jsonify(out)
 
-# Health check endpoints
+# Service health monitoring endpoints
 @app.route("/api/health-pulse")
 def health_check():
     return jsonify({"status": "alive", "service": "Trekking App V2"})
@@ -1011,7 +1082,7 @@ def db_audit():
     })
 
 
-# Staff profile and password
+# Staff member profile and password updates
 @app.route("/api/staff-detail", methods=["GET", "PUT"])
 @roles_required("staff")
 def staff_detail():
@@ -1065,7 +1136,7 @@ def staff_change_key():
     return jsonify({"message": "Password changed successfully"})
 
 
-# Trekker password change
+# Trekker password change updates
 @app.route("/api/trekker/change-passcode", methods=["POST"])
 @roles_required("trekker")
 def trekker_change_passcode():
@@ -1088,7 +1159,7 @@ def trekker_change_passcode():
     return jsonify({"message": "Password changed successfully"})
 
 
-# Test email endpoints
+# Developer utility endpoints for email testing
 @app.route("/api/probe-mail")
 def probe_mail():
     from tasks import send_email
@@ -1108,7 +1179,7 @@ def async_probe_mail():
     return jsonify({"message": "Async test email queued", "task_id": job.id})
 
 
-# Task trigger endpoints
+# Developer endpoints to manually run background jobs
 @app.route("/api/tasks/trigger-reminder")
 @roles_required("admin")
 def trigger_daily_reminder():
@@ -1135,6 +1206,8 @@ def trigger_csv_export():
 
 @app.route("/api/tasks/status/<task_id>")
 def task_progress(task_id):
+    if not current_user.is_authenticated:
+        return jsonify({"error": "Not authenticated"}), 401
     job = AsyncResult(task_id, app=celery)
     result = job.result
     if not isinstance(result, (dict, list, str, int, float, bool, type(None))):
@@ -1148,71 +1221,87 @@ def task_progress(task_id):
         "result": result
     })
 
-if __name__ == "__main__":
-    with app.app_context():
-        db.create_all()
 
-        roles_list = ["admin", "staff", "trekker"]
-        for role_name in roles_list:
-            existing_role = user_store.find_role(role_name)
-            if not existing_role:
-                user_store.create_role(name=role_name, desc=role_name + " role")
+@app.route("/api/trekker/download-export/<file_name>")
+@roles_required("trekker")
+def download_export(file_name):
+    u = load_current_account()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    expected_name = "history_user_" + str(u.id) + ".csv"
+    if file_name != expected_name:
+        return jsonify({"error": "Not allowed"}), 403
+    export_folder = os.path.join(app.root_path, "exports")
+    return send_from_directory(export_folder, file_name, as_attachment=True)
+
+# Create database tables and seed demo data at import time rather than only under main.
+# This ensures that running via Flask CLI or Gunicorn starts with required roles and seed users.
+with app.app_context():
+    db.create_all()
+
+    roles_list = ["admin", "staff", "trekker"]
+    for role_name in roles_list:
+        existing_role = user_store.find_role(role_name)
+        if not existing_role:
+            user_store.create_role(name=role_name, desc=role_name + " role")
+    db.session.commit()
+
+    admin_email = "head@peakventure.com"
+    existing_admin = user_store.find_user(email=admin_email)
+    if not existing_admin:
+        admin_user = user_store.create_user(
+            email=admin_email,
+            password=hash_password("peak@2026"),
+            name="Head Admin",
+            mobile="9876543210",
+            active=True
+        )
+        admin_role = user_store.find_role("admin")
+        user_store.add_role_to_user(admin_user, admin_role)
+        db.session.commit()
+        print("Default admin seeded: head@peakventure.com / peak@2026")
+
+    sample_staff_email = "guide@peakventure.com"
+    existing_guide = user_store.find_user(email=sample_staff_email)
+    if not existing_guide:
+        guide_user = user_store.create_user(
+            email=sample_staff_email,
+            password=hash_password("guide@2026"),
+            name="Arjun Rawat",
+            mobile="9988776655",
+            active=True
+        )
+        staff_role = user_store.find_role("staff")
+        user_store.add_role_to_user(guide_user, staff_role)
         db.session.commit()
 
-        admin_email = "head@peakventure.com"
-        existing_admin = user_store.find_user(email=admin_email)
-        if not existing_admin:
-            admin_user = user_store.create_user(
-                email=admin_email,
-                password=hash_password("peak@2026"),
-                name="Head Admin",
-                mobile="9876543210",
-                active=True
-            )
-            admin_role = user_store.find_role("admin")
-            user_store.add_role_to_user(admin_user, admin_role)
-            db.session.commit()
-            print("Default admin seeded: head@peakventure.com / peak@2026")
+        guide_profile = StaffInfo(
+            user_id=guide_user.id,
+            info="Experienced mountain guide from Uttarakhand",
+            exp_years="5",
+            skills="Rock Climbing, Navigation, First Aid"
+        )
+        db.session.add(guide_profile)
+        db.session.commit()
+        print("Demo guide seeded: guide@peakventure.com / guide@2026")
 
-        sample_staff_email = "guide@peakventure.com"
-        existing_guide = user_store.find_user(email=sample_staff_email)
-        if not existing_guide:
-            guide_user = user_store.create_user(
-                email=sample_staff_email,
-                password=hash_password("guide@2026"),
-                name="Arjun Rawat",
-                mobile="9988776655",
-                active=True
-            )
-            staff_role = user_store.find_role("staff")
-            user_store.add_role_to_user(guide_user, staff_role)
-            db.session.commit()
+    if Trek.query.count() == 0:
+        from datetime import timedelta
+        sample_trek = Trek(
+            title="Valley of Flowers Expedition",
+            place="Uttarakhand",
+            level="Moderate",
+            duration=6,
+            max_slots=15,
+            left_slots=15,
+            status="Open",
+            start_date=date.today() + timedelta(days=14),
+            end_date=date.today() + timedelta(days=20),
+            about="A breathtaking trek through the famous Valley of Flowers, a UNESCO World Heritage site. Experience alpine flowers, glaciers, and panoramic mountain views."
+        )
+        db.session.add(sample_trek)
+        db.session.commit()
+        print("Demo trek seeded: Valley of Flowers Expedition (Open, starting in 14 days)")
 
-            guide_profile = StaffInfo(
-                user_id=guide_user.id,
-                info="Experienced mountain guide from Uttarakhand",
-                exp_years="5",
-                skills="Rock Climbing, Navigation, First Aid"
-            )
-            db.session.add(guide_profile)
-            db.session.commit()
-            print("Demo guide seeded: guide@peakventure.com / guide@2026")
-
-        if Trek.query.count() == 0:
-            from datetime import timedelta
-            sample_trek = Trek(
-                title="Valley of Flowers Expedition",
-                place="Uttarakhand",
-                level="Moderate",
-                duration=6,
-                max_slots=15,
-                left_slots=15,
-                status="Open",
-                start_date=date.today() + timedelta(days=14),
-                end_date=date.today() + timedelta(days=20),
-                about="A breathtaking trek through the famous Valley of Flowers, a UNESCO World Heritage site. Experience alpine flowers, glaciers, and panoramic mountain views."
-            )
-            db.session.add(sample_trek)
-            db.session.commit()
-            print("Demo trek seeded: Valley of Flowers Expedition (Open, starting in 14 days)")
+if __name__ == "__main__":
     app.run(debug=True)

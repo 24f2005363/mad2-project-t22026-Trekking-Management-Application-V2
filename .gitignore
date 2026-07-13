@@ -17,6 +17,9 @@ env/
 celerybeat-schedule
 *.log
 
+# Generated CSV exports
+exports/
+
 # Frontend dependencies
 node_modules/
 dist/

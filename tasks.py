@@ -135,9 +135,8 @@ def write_bookings_csv(person_id):
         return {"status": "failed", "message": "User not found"}
 
     bookings = Booking.query.filter_by(user_id=person_id).all()
-    from flask import current_app
     app_root = current_app.root_path
-    folder = os.path.join(app_root, "static", "exports")
+    folder = os.path.join(app_root, "exports")
     os.makedirs(folder, exist_ok=True)
 
     file_name = "history_user_" + str(person_id) + ".csv"
@@ -159,7 +158,7 @@ def write_bookings_csv(person_id):
     return {
         "status": "success",
         "message": "CSV ready",
-        "file_url": "/static/exports/" + file_name
+        "file_url": "/api/trekker/download-export/" + file_name
     }
 
 

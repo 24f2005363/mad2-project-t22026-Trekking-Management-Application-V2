@@ -5,7 +5,7 @@ from flask_security import UserMixin, RoleMixin
 
 db = SQLAlchemy()
 
-# Junction linking users to their roles
+# Many-to-many junction table connecting users to their assigned roles
 role_assignments = db.Table(
     "role_assignments",
     db.Column("user_id", db.Integer(), db.ForeignKey("user.id", ondelete="CASCADE"), primary_key=True),

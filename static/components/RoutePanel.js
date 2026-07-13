@@ -37,6 +37,15 @@ export default {
                 if (res.ok) this.treks = await res.json()
             } catch (err) { console.log("Search error") }
         },
+        // Reload treks with the current search query (if active) so that
+        // modifications or status changes don't clear the user's filtered view
+        refreshTreks() {
+            if (this.searchWord.trim()) {
+                this.searchTreks()
+            } else {
+                this.loadTreks()
+            }
+        },
         async handleCreateTrek() {
             this.trekMsg = ""; this.trekErr = ""
             try {
@@ -49,7 +58,7 @@ export default {
                 if (res.ok) {
                     this.trekMsg = "Trek route created successfully!"
                     this.newTrek = { title: "", place: "", level: "Easy", duration: "", max_slots: "", start_date: "", end_date: "", about: "" }
-                    this.loadTreks()
+                    this.refreshTreks()
                 } else {
                     this.trekErr = result.error || "Failed to create trek"
                 }
@@ -62,14 +71,14 @@ export default {
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ status: newStatus })
                 })
-                if (res.ok) this.loadTreks()
+                if (res.ok) this.refreshTreks()
             } catch (err) { console.log("Status update error") }
         },
         async deleteTrek(trekId) {
             if (!confirm("Delete this trek?")) return
             try {
                 const res = await fetch("/api/adm-treks/remove/" + trekId, { method: "DELETE" })
-                if (res.ok) this.loadTreks()
+                if (res.ok) this.refreshTreks()
             } catch (err) { console.log("Delete error") }
         },
         openEditForm(t) {
@@ -95,7 +104,7 @@ export default {
                 })
                 if (res.ok) {
                     this.editTrek = null
-                    this.loadTreks()
+                    this.refreshTreks()
                 } else {
                     const result = await res.json()
                     alert(result.error || "Edit failed")
@@ -112,7 +121,7 @@ export default {
                 const res = await fetch("/api/adm-guides/assign-route/" + this.selectedStaffId + "/" + this.selectedTrekId, { method: "POST" })
                 if (res.ok) {
                     this.selectedTrekId = null
-                    this.loadTreks()
+                    this.refreshTreks()
                 } else {
                     const result = await res.json()
                     alert(result.error || "Assignment failed")

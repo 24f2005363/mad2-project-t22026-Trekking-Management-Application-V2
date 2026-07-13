@@ -72,33 +72,38 @@ A full-stack role-based web application for managing trekking activities, trek s
 ### 6. Caching
 - Redis caching with 30-second TTL on frequently accessed GET routes:
   - Admin stats, trek list, guide list, client list, bookings
-  - Trekker explore results, trek detail
+  - Trekker treks-by-id
 - Cache auto-cleared on POST/PUT/DELETE operations via `after_request` hook
-- Graceful degradation if Redis is down (try/except around `cache.clear()`)
+- Graceful degradation if Redis is unreachable: cached routes fall back to computing
+  the response directly instead of erroring (`safe_cached` wrapper in `app.py`), and
+  cache-clear failures are swallowed the same way
 
 ### 7. Security
 - Session-based authentication via Flask-Security
 - Role-based access control on all routes
-- Blacklisted/inactive users blocked at login
+- Blacklisted/inactive users blocked at login, and mid-session via a `before_request` guard
 - Only assigned staff can manage a trek
 - Password hashing with bcrypt
 - CSRF disabled (session-based API)
-- No hardcoded credentials in source code (all in `config.py`)
+- CSV exports are private: served through an authenticated, ownership-checked route
+  instead of a public static file
+- Every error response (400/401/403/404/405/415/500, including unhandled exceptions)
+  is returned as JSON, never a raw HTML/traceback page
 
 ## API Endpoints
 
 ### Authentication
 | Method | Endpoint | Access | Description |
 |--------|----------|--------|-------------|
+| POST | `/api/join-trekker` | Public | Trekker registration |
 | POST | `/api/sign-in` | Public | Login |
 | GET | `/api/sign-out` | Any | Logout |
-| POST | `/api/register` | Public | Trekker registration |
-| GET | `/api/user-state` | Any | Current user session info |
+| GET | `/api/current-user` | Any | Current user session info |
 
 ### Admin
 | Method | Endpoint | Access | Description |
 |--------|----------|--------|-------------|
-| GET | `/api/adm-overview` | Admin | Dashboard stats |
+| GET | `/api/admin-stats` | Admin | Dashboard stats |
 | GET | `/api/adm-treks/list` | Admin | List all treks |
 | GET | `/api/adm-treks/search` | Admin | Search treks |
 | POST | `/api/adm-treks/add` | Admin | Create trek |
@@ -107,7 +112,7 @@ A full-stack role-based web application for managing trekking activities, trek s
 | DELETE | `/api/adm-treks/remove/<id>` | Admin | Delete trek |
 | GET | `/api/adm-guides/list` | Admin | List all staff |
 | GET | `/api/adm-guides/search` | Admin | Search staff |
-| POST | `/api/adm-guides/add` | Admin | Create staff |
+| POST | `/api/adm-guides/new` | Admin | Create staff |
 | POST | `/api/adm-guides/assign-route/<guide_id>/<route_id>` | Admin | Assign staff to trek |
 | POST | `/api/adm-guides/block/<guide_id>` | Admin | Block staff |
 | POST | `/api/adm-guides/unblock/<guide_id>` | Admin | Unblock staff |
@@ -116,10 +121,11 @@ A full-stack role-based web application for managing trekking activities, trek s
 | POST | `/api/adm-clients/block/<client_id>` | Admin | Block trekker |
 | POST | `/api/adm-clients/unblock/<client_id>` | Admin | Unblock trekker |
 | DELETE | `/api/adm-clients/remove/<client_id>` | Admin | Delete trekker |
-| GET | `/api/adm-bookings` | Admin | View all bookings |
-| GET | `/api/probe-mail` | Admin | Test email (sync) |
-| GET | `/api/async-probe-mail` | Admin | Test email (async via Celery) |
-| GET | `/api/trigger-monthly-report` | Admin | Trigger monthly report |
+| GET | `/api/adm-bookings/all` | Admin | View all bookings |
+| GET | `/api/probe-mail` | Public | Test email (sync) |
+| GET | `/api/async-probe-mail` | Public | Test email (async via Celery) |
+| GET | `/api/tasks/trigger-reminder` | Admin | Trigger daily trek reminder job |
+| GET | `/api/tasks/trigger-report` | Admin | Trigger monthly report job |
 
 ### Staff
 | Method | Endpoint | Access | Description |
@@ -130,8 +136,7 @@ A full-stack role-based web application for managing trekking activities, trek s
 | POST | `/api/staff-panel/routes/<id>/change-status` | Staff | Update trek status |
 | POST | `/api/staff-panel/routes/<id>/adjust-slots` | Staff | Adjust available slots |
 | POST | `/api/staff-panel/routes/<id>/mark-done` | Staff | Mark trek as completed |
-| GET | `/api/staff-detail` | Staff | View own profile |
-| PUT | `/api/staff-detail` | Staff | Update own profile |
+| GET, PUT | `/api/staff-detail` | Staff | View/update own profile |
 | POST | `/api/staff-change-key` | Staff | Change password |
 
 ### Trekker
@@ -144,31 +149,35 @@ A full-stack role-based web application for managing trekking activities, trek s
 | POST | `/api/trekker/cancel/<book_id>` | Trekker | Cancel booking |
 | GET | `/api/trekker/my-trips` | Trekker | Active bookings |
 | GET | `/api/trekker/history` | Trekker | Completed/cancelled history |
-| PUT | `/api/trekker/update-profile` | Trekker | Update name/mobile |
+| GET, PUT | `/api/trekker/account` | Trekker | View/update name and mobile |
 | POST | `/api/trekker/change-passcode` | Trekker | Change password |
 | GET | `/api/tasks/export-csv` | Trekker | Trigger CSV export |
-| GET | `/api/tasks/status/<task_id>` | Any | Check Celery task status |
+| GET | `/api/trekker/download-export/<file_name>` | Trekker | Download own CSV export (ownership-checked) |
+| GET | `/api/tasks/status/<task_id>` | Any authenticated user | Check Celery task status |
 
 ### Health
 | Method | Endpoint | Access | Description |
 |--------|----------|--------|-------------|
 | GET | `/api/health-pulse` | Any | Server health check |
 | GET | `/api/db-audit` | Any | Database connection check |
+| GET | `/db-status` | Any | Row counts for users/roles/treks/bookings |
 
 ## Project Structure
 
 ```
 project-root/
-├── app.py                  # Flask app, 49 API routes, seeding
+├── app.py                  # Flask app, API routes, DB creation + seeding (runs on import)
 ├── config.py               # Configuration (DB, Redis, Celery, Email)
 ├── models.py               # SQLAlchemy models (User, Role, Trek, Booking, StaffInfo)
 ├── tasks.py                # Celery tasks (reminder, report, CSV, test)
-├── celery_setup.py         # Celery app factory
+├── celery_setup.py         # Celery app factory (make_celery) - real instance lives at app.celery
 ├── redis_helper.py         # Cache helper utilities
 ├── db_init.py              # Standalone DB seeding script
 ├── requirements.txt        # (create from pip freeze)
 ├── instance/
 │   └── trek.db             # SQLite database (auto-created)
+├── exports/                # Generated CSV exports (private - served through an
+│                            # authenticated route, not exposed under static/)
 ├── templates/
 │   └── index.html          # Vue SPA entry point (Jinja2)
 ├── static/
@@ -192,7 +201,6 @@ project-root/
 │       ├── TripListView.js
 │       ├── HistoryView.js
 │       └── AccountView.js
-└── static/exports/         # Generated CSV exports
 ```
 
 ## Setup Instructions
@@ -239,7 +247,9 @@ redis-cli ping
 
 ### 5. Start Celery Worker
 ```bash
-celery -A celery_setup.celery worker --loglevel=info
+celery -A app.celery worker --loglevel=info
+# Windows may need the solo pool:
+celery -A app.celery worker --loglevel=info --pool=solo
 ```
 
 ### 6. Run the Application

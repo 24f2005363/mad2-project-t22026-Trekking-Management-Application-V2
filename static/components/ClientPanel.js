@@ -23,18 +23,27 @@ export default {
                 if (res.ok) this.clients = await res.json()
             } catch (err) { console.log("Search error") }
         },
+        // Refresh the client list with the existing search filter to maintain
+        // the active viewport state after blocking or deleting a client
+        refreshClients() {
+            if (this.searchWord.trim()) {
+                this.searchClients()
+            } else {
+                this.loadClients()
+            }
+        },
         async toggleClientBlock(client) {
             const endpoint = client.blacklisted ? "/api/adm-clients/unblock/" + client.user_id : "/api/adm-clients/block/" + client.user_id
             try {
                 const res = await fetch(endpoint, { method: "POST" })
-                if (res.ok) this.loadClients()
+                if (res.ok) this.refreshClients()
             } catch (err) { console.log("Toggle block error") }
         },
         async deleteClient(clientId) {
             if (!confirm("Remove this client?")) return
             try {
                 const res = await fetch("/api/adm-clients/remove/" + clientId, { method: "DELETE" })
-                if (res.ok) this.loadClients()
+                if (res.ok) this.refreshClients()
             } catch (err) { console.log("Delete error") }
         }
     },

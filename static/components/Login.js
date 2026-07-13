@@ -33,14 +33,14 @@ export default {
                     return
                 }
 
-                // Save credentials to local storage
+                // Persist user role and name to keep session state across page refreshes
                 localStorage.setItem("user-role", result.roles[0] || "")
                 localStorage.setItem("user-name", result.name)
 
-                // Notify navbar of update
+                // Alert the navbar component to refresh and display the correct menu links
                 window.dispatchEvent(new Event("auth-changed"))
 
-                // Route accordingly
+                // Direct the user to their respective dashboard depending on their assigned role
                 if (result.roles.includes("admin")) {
                     this.$router.push("/admin")
                 } else if (result.roles.includes("staff")) {

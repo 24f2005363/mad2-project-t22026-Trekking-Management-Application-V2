@@ -26,6 +26,15 @@ export default {
                 if (res.ok) this.guides = await res.json()
             } catch (err) { console.log("Search error") }
         },
+        // Refresh the guides list using the active filter to prevent losing
+        // the current search results or query context after updating a guide
+        refreshGuides() {
+            if (this.searchWord.trim()) {
+                this.searchGuides()
+            } else {
+                this.loadGuides()
+            }
+        },
         async handleCreateGuide() {
             this.guideMsg = ""; this.guideErr = ""
             try {
@@ -38,7 +47,7 @@ export default {
                 if (res.ok) {
                     this.guideMsg = "Staff profile added successfully!"
                     this.newGuide = { name: "", email: "", mobile: "", password: "", exp_years: "", skills: "", info: "" }
-                    this.loadGuides()
+                    this.refreshGuides()
                 } else {
                     this.guideErr = result.error || "Failed to create staff"
                 }
@@ -48,7 +57,7 @@ export default {
             const endpoint = guide.blacklisted ? "/api/adm-guides/unblock/" + guide.guide_profile_id : "/api/adm-guides/block/" + guide.guide_profile_id
             try {
                 const res = await fetch(endpoint, { method: "POST" })
-                if (res.ok) this.loadGuides()
+                if (res.ok) this.refreshGuides()
             } catch (err) { console.log("Toggle block error") }
         }
     },

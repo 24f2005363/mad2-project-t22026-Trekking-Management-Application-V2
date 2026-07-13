@@ -121,6 +121,9 @@ export default {
                 if (res.ok) {
                     this.statusMsg = result.message + " (" + result.bookings_updated + " bookings)"
                     this.selectedRoute.status = "Completed"
+                    this.selectedRoute.participants.forEach(p => {
+                        if (p.book_status == "Booked") p.book_status = "Completed"
+                    })
                 } else {
                     this.statusError = result.error || "Failed"
                 }

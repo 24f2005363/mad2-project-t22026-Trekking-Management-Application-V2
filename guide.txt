@@ -67,10 +67,10 @@ Verify with:
 ==================================================
 Open a NEW terminal (keep the first one open):
 
-celery -A celery_setup.celery worker --loglevel=info
+celery -A app.celery worker --loglevel=info
 
 For Windows, you may need:
-  celery -A celery_setup.celery worker --loglevel=info --pool=solo
+  celery -A app.celery worker --loglevel=info --pool=solo
 
 ==================================================
 7. START FLASK APP
@@ -141,7 +141,7 @@ Test email: Log in as Admin, click "Send Monthly Report"
   redis-cli ping      - Check if Redis is running
   redis-cli FLUSHALL  - Clear all Redis data (cache)
 
-  celery -A celery_setup.celery purge -f   - Clear pending Celery tasks
+  celery -A app.celery purge -f   - Clear pending Celery tasks
 
 ==================================================
 14. TROUBLESHOOTING
@@ -154,7 +154,7 @@ PROBLEM: "Address already in use" on port 5000
 
 PROBLEM: Celery won't start
   SOLUTION: Make sure Redis is running first (redis-cli ping)
-    On Windows, try: celery -A celery_setup.celery worker --pool=solo
+    On Windows, try: celery -A app.celery worker --pool=solo
 
 PROBLEM: Email not sending
   SOLUTION:
@@ -186,5 +186,5 @@ PROBLEM: Module not found errors
   pip install -r requirements.txt
   sudo service redis-server start
   redis-cli ping
-  celery -A celery_setup.celery worker --loglevel=info &
+  celery -A app.celery worker --loglevel=info &
   python3 app.py
