@@ -1,0 +1,190 @@
+PEAKVENTURE TREKKING APP - SETUP GUIDE
+========================================
+
+This file explains how to run the project step by step.
+
+==================================================
+1. INSTALL REQUIRED TOOLS
+==================================================
+- Python 3.10+ (https://python.org)
+- Git (https://git-scm.com)
+- Redis (https://redis.io)
+  - Windows: Use WSL (wsl --install) then:
+    sudo apt update && sudo apt install redis-server
+  - Or use Redis for Windows from Microsoft archive
+- VS Code (recommended)
+
+==================================================
+2. CLONE / OPEN THE PROJECT
+==================================================
+git clone <your-repo-url>
+cd trekking-app-v2
+
+Or open the already-downloaded folder in VS Code.
+
+==================================================
+3. CREATE VIRTUAL ENVIRONMENT
+==================================================
+Windows:
+  python -m venv venv
+  venv\Scripts\activate
+
+WSL / Linux / Mac:
+  python3 -m venv venv
+  source venv/bin/activate
+
+==================================================
+4. INSTALL DEPENDENCIES
+==================================================
+pip install -r requirements.txt
+
+If requirements.txt is missing, create one:
+  pip freeze > requirements.txt
+
+Essential packages:
+  pip install flask flask-sqlalchemy flask-security
+  pip install celery redis flask-caching
+  pip install bcrypt email-validator
+
+==================================================
+5. START REDIS
+==================================================
+WSL / Ubuntu:
+  sudo service redis-server start
+
+Mac:
+  brew services start redis
+
+Windows (native):
+  redis-server
+
+Verify with:
+  redis-cli ping
+  (should return: PONG)
+
+==================================================
+6. START CELERY WORKER
+==================================================
+Open a NEW terminal (keep the first one open):
+
+celery -A celery_setup.celery worker --loglevel=info
+
+For Windows, you may need:
+  celery -A celery_setup.celery worker --loglevel=info --pool=solo
+
+==================================================
+7. START FLASK APP
+==================================================
+In the FIRST terminal (with venv activated):
+
+python app.py
+
+You should see:
+  * Running on http://127.0.0.1:5000
+  Default admin seeded: head@peakventure.com / peak@2026
+  Demo guide seeded: guide@peakventure.com / guide@2026
+
+==================================================
+8. OPEN THE APP
+==================================================
+Open your browser and go to:
+  http://127.0.0.1:5000
+
+==================================================
+9. LOGIN CREDENTIALS (DEMO)
+==================================================
+  Admin:   head@peakventure.com / peak@2026
+  Staff:   guide@peakventure.com / guide@2026
+  Trekker: Register a new account from the app
+
+==================================================
+10. GMAIL SMTP SETUP (for email features)
+==================================================
+Edit config.py and set your Gmail credentials:
+
+  MAIL_USERNAME = "your.email@gmail.com"
+  MAIL_PASSWORD = "your-16-char-app-password"
+
+Steps to get a Gmail App Password:
+  1. Go to https://myaccount.google.com/apppasswords
+  2. Select "Mail" as the app and "Other" as device
+  3. Copy the 16-character password
+  4. Paste it into config.py as MAIL_PASSWORD
+
+Test email: Log in as Admin, click "Send Monthly Report"
+
+==================================================
+11. GITHUB PUSH (first time)
+==================================================
+  git init
+  git add .
+  git commit -m "initial commit"
+  git branch -M main
+  git remote add origin <your-repo-url>
+  git push -u origin main
+
+==================================================
+12. NORMAL UPDATE PUSH
+==================================================
+  git add .
+  git commit -m "your message"
+  git push origin main
+
+==================================================
+13. USEFUL COMMANDS
+==================================================
+  git status          - Check changed files
+  git log --oneline   - View commit history
+  git diff            - View unstaged changes
+  git branch          - List branches
+
+  redis-cli ping      - Check if Redis is running
+  redis-cli FLUSHALL  - Clear all Redis data (cache)
+
+  celery -A celery_setup.celery purge -f   - Clear pending Celery tasks
+
+==================================================
+14. TROUBLESHOOTING
+==================================================
+
+PROBLEM: "Address already in use" on port 5000
+  SOLUTION: Close other Flask instances, or use:
+    netstat -ano | findstr :5000
+    taskkill /PID <PID> /F
+
+PROBLEM: Celery won't start
+  SOLUTION: Make sure Redis is running first (redis-cli ping)
+    On Windows, try: celery -A celery_setup.celery worker --pool=solo
+
+PROBLEM: Email not sending
+  SOLUTION:
+    - Verify Gmail App Password (not regular password)
+    - Enable 2-Factor Authentication on your Google account
+    - Check MAIL_USERNAME and MAIL_PASSWORD in config.py
+    - Try the "Test Email" button in the Admin dashboard
+
+PROBLEM: Database errors / table not found
+  SOLUTION:
+    - Delete instance/trek.db and restart the app
+    - The app will recreate the database with demo data
+
+PROBLEM: Cache issues / stale data
+  SOLUTION: Restart Redis or run:
+    redis-cli FLUSHALL
+
+PROBLEM: Module not found errors
+  SOLUTION:
+    - Ensure virtual environment is activated
+    - Run: pip install -r requirements.txt
+
+==================================================
+15. QUICK START (copy-paste sequence for WSL)
+==================================================
+  cd ~/trekking-app-v2
+  python3 -m venv venv
+  source venv/bin/activate
+  pip install -r requirements.txt
+  sudo service redis-server start
+  redis-cli ping
+  celery -A celery_setup.celery worker --loglevel=info &
+  python3 app.py

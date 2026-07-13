@@ -3,6 +3,7 @@ from models import db, User, Role
 from flask_security import SQLAlchemyUserDatastore, Security
 from flask_security.utils import hash_password
 from config import Config
+import os
 
 def init_database():
     app = Flask(__name__)
@@ -23,12 +24,13 @@ def init_database():
                 user_store.create_role(name=role_name, desc=role_name + " role")
         db.session.commit()
 
-        admin_email = "head@peakventure.com"
+        admin_email = os.environ.get("ADMIN_EMAIL", "head@peakventure.com")
+        admin_pass = os.environ.get("ADMIN_PASSWORD", "peak@2026")
         existing_admin = user_store.find_user(email=admin_email)
         if not existing_admin:
             admin_user = user_store.create_user(
                 email=admin_email,
-                password=hash_password("peak@2026"),
+                password=hash_password(admin_pass),
                 name="Head Admin",
                 mobile="9876543210",
                 active=True

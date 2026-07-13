@@ -6,6 +6,7 @@ import Login from "./components/Login.js"
 import Register from "./components/Register.js"
 import AdminDashboard from "./components/AdminDashboard.js"
 import StaffDashboard from "./components/StaffDashboard.js"
+import StaffSettings from "./components/StaffSettings.js"
 import TrekkerDashboard from "./components/TrekkerDashboard.js"
 
 const routes = [
@@ -13,6 +14,7 @@ const routes = [
     { path: "/register", component: Register, meta: { anonymous: true } },
     { path: "/admin", component: AdminDashboard, meta: { requiredRole: "admin" } },
     { path: "/staff", component: StaffDashboard, meta: { requiredRole: "staff" } },
+    { path: "/staff/settings", component: StaffSettings, meta: { requiredRole: "staff" } },
     { path: "/trekker", component: TrekkerDashboard, meta: { requiredRole: "trekker" } },
     { path: "/:pathMatch(.*)*", redirect: "/" }
 ]

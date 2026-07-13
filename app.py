@@ -42,6 +42,15 @@ def guard_inactive_sessions():
             logout_user()
             return make_response(jsonify({"error": "account disabled"}), 403)
 
+@app.after_request
+def auto_clear_cache(response):
+    if request.method in ("POST", "PUT", "DELETE"):
+        try:
+            cache.clear()
+        except Exception:
+            pass
+    return response
+
 @app.route("/")
 def index_view():
     return render_template("index.html")
@@ -137,6 +146,7 @@ def get_active_profile():
 
 @app.route("/api/admin-stats")
 @roles_required("admin")
+@cache.cached(timeout=30)
 def get_admin_panel_stats():
     # count users with trekker and staff role
     clients_count = User.query.join(User.roles).filter(Role.name == "trekker").count()
@@ -153,6 +163,7 @@ def get_admin_panel_stats():
 
 @app.route("/api/adm-treks/list", methods=["GET"])
 @roles_required("admin")
+@cache.cached(timeout=30)
 def get_trek_routes():
     all_treks = Trek.query.all()
     out = []
@@ -231,21 +242,70 @@ def new_trek_route():
     if not title or not place or not level or not duration or not max_slots or not start_date or not end_date:
         return jsonify({"error": "Missing required fields"}), 400
 
+    try:
+        parsed_start = date.fromisoformat(start_date)
+        parsed_end = date.fromisoformat(end_date)
+        duration = int(duration)
+        max_slots = int(max_slots)
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid date format or numeric fields."}), 400
     new_t = Trek(
         title=title,
         place=place,
         level=level,
-        duration=int(duration),
-        max_slots=int(max_slots),
-        left_slots=int(max_slots),
+        duration=duration,
+        max_slots=max_slots,
+        left_slots=max_slots,
         status="Pending",
-        start_date=date.fromisoformat(start_date),
-        end_date=date.fromisoformat(end_date),
+        start_date=parsed_start,
+        end_date=parsed_end,
         about=data.get("about", "")
     )
     db.session.add(new_t)
     db.session.commit()
     return jsonify({"message": "Trek created", "id": new_t.id}), 201
+
+@app.route("/api/adm-treks/edit/<int:route_id>", methods=["PUT"])
+@roles_required("admin")
+def edit_trek_route(route_id):
+    t = db.session.get(Trek, route_id)
+    if not t:
+        return jsonify({"error": "Trek not found"}), 404
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "json body is required"}), 400
+    if "title" in data: t.title = data["title"]
+    if "place" in data: t.place = data["place"]
+    if "level" in data: t.level = data["level"]
+    if "duration" in data:
+        try:
+            t.duration = int(data["duration"])
+        except (ValueError, TypeError):
+            return jsonify({"error": "Duration must be a number"}), 400
+    if "max_slots" in data:
+        try:
+            new_max = int(data["max_slots"])
+        except (ValueError, TypeError):
+            return jsonify({"error": "Max slots must be a number"}), 400
+        booked = t.max_slots - t.left_slots
+        if new_max < booked:
+            return jsonify({"error": "Cannot reduce max slots below " + str(booked) + " (already booked)"}), 400
+        diff = new_max - t.max_slots
+        t.max_slots = new_max
+        t.left_slots = max(0, t.left_slots + diff)
+    if "start_date" in data:
+        try:
+            t.start_date = date.fromisoformat(data["start_date"])
+        except ValueError:
+            return jsonify({"error": "Invalid start date format"}), 400
+    if "end_date" in data:
+        try:
+            t.end_date = date.fromisoformat(data["end_date"])
+        except ValueError:
+            return jsonify({"error": "Invalid end date format"}), 400
+    if "about" in data: t.about = data["about"]
+    db.session.commit()
+    return jsonify({"message": "Trek updated", "id": t.id})
 
 @app.route("/api/adm-treks/update-state/<int:route_id>", methods=["POST"])
 @roles_required("admin")
@@ -279,6 +339,7 @@ def delete_trek_route(route_id):
 
 @app.route("/api/adm-guides/list", methods=["GET"])
 @roles_required("admin")
+@cache.cached(timeout=30)
 def get_guides_profiles():
     guides = StaffInfo.query.all()
     out = []
@@ -288,6 +349,7 @@ def get_guides_profiles():
             "user_id": g.user_id,
             "name": g.staff_account.name,
             "email": g.staff_account.email,
+            "mobile": g.staff_account.mobile or "",
             "info": g.info,
             "exp_years": g.exp_years,
             "skills": g.skills,
@@ -317,6 +379,7 @@ def search_guides_profiles():
             "user_id": g.user_id,
             "name": g.staff_account.name,
             "email": g.staff_account.email,
+            "mobile": g.staff_account.mobile or "",
             "info": g.info,
             "exp_years": g.exp_years,
             "skills": g.skills,
@@ -412,6 +475,7 @@ def restore_guide_account(guide_id):
 
 @app.route("/api/adm-clients/list", methods=["GET"])
 @roles_required("admin")
+@cache.cached(timeout=30)
 def get_clients_profiles():
     clients = User.query.join(User.roles).filter(Role.name == "trekker").all()
     out = []
@@ -622,11 +686,15 @@ def staff_update_slots(route_id):
     new_slots = data.get("slots")
     if new_slots is None:
         return jsonify({"error": "Send slots value"}), 400
-    if int(new_slots) > t.max_slots:
+    try:
+        new_slots = int(new_slots)
+    except (ValueError, TypeError):
+        return jsonify({"error": "Slots must be a number"}), 400
+    if new_slots > t.max_slots:
         return jsonify({"error": "Cannot exceed max slots"}), 400
-    if int(new_slots) < 0:
+    if new_slots < 0:
         return jsonify({"error": "Slots cannot be negative"}), 400
-    t.left_slots = int(new_slots)
+    t.left_slots = new_slots
     db.session.commit()
     return jsonify({"message": "Slots updated", "left_slots": t.left_slots})
 
@@ -700,7 +768,11 @@ def trekker_explore():
     if place_filter and place_filter != "All":
         q = q.filter(Trek.place.ilike("%" + place_filter + "%"))
     if dur_filter and dur_filter != "All":
-        q = q.filter(Trek.duration == int(dur_filter))
+        try:
+            dur_filter = int(dur_filter)
+        except (ValueError, TypeError):
+            return jsonify({"error": "Duration filter must be a number"}), 400
+        q = q.filter(Trek.duration == dur_filter)
     results = q.all()
     out = []
     for t in results:
@@ -720,6 +792,7 @@ def trekker_explore():
 
 @app.route("/api/trekker/treks/<int:route_id>")
 @roles_required("trekker")
+@cache.cached(timeout=30)
 def trekker_route_view(route_id):
     t = db.session.get(Trek, route_id)
     if not t:
@@ -753,7 +826,7 @@ def trekker_make_reservation():
         return jsonify({"error": "trek_id needed"}), 400
     try:
         seat_count = int(seat_count)
-    except:
+    except (ValueError, TypeError):
         return jsonify({"error": "seats must be a number"}), 400
     if seat_count < 1:
         return jsonify({"error": "At least 1 seat"}), 400
@@ -767,7 +840,16 @@ def trekker_make_reservation():
     existing = Booking.query.filter_by(user_id=u.id, trek_id=route_id).first()
     if existing:
         if existing.status == "Booked":
-            return jsonify({"error": "You already have a booking for this trek"}), 400
+            new_qty = existing.qty + seat_count
+            if new_qty > t.left_slots + existing.qty:
+                return jsonify({"error": "Not enough seats available"}), 400
+            existing.qty = new_qty
+            existing.book_time = datetime.utcnow()
+            t.left_slots = t.left_slots - seat_count
+            if t.left_slots == 0:
+                t.status = "Closed"
+            db.session.commit()
+            return jsonify({"message": "Extra seats added", "book_id": existing.id, "slots": new_qty}), 200
         if existing.status == "Completed":
             return jsonify({"error": "This trek is already completed"}), 400
         if existing.status == "Cancelled":
@@ -889,6 +971,7 @@ def trekker_account():
 
 @app.route("/api/adm-bookings/all")
 @roles_required("admin")
+@cache.cached(timeout=30)
 def get_all_client_bookings():
     bookings = Booking.query.all()
     out = []
@@ -905,6 +988,125 @@ def get_all_client_bookings():
             "qty": b.qty
         })
     return jsonify(out)
+
+# Health check endpoints
+@app.route("/api/health-pulse")
+def health_check():
+    return jsonify({"status": "alive", "service": "Trekking App V2"})
+
+
+@app.route("/api/db-audit")
+def db_audit():
+    user_count = User.query.count()
+    role_count = Role.query.count()
+    staff_count = StaffInfo.query.count()
+    trek_count = Trek.query.count()
+    book_count = Booking.query.count()
+    return jsonify({
+        "users": user_count,
+        "roles": role_count,
+        "staff_profiles": staff_count,
+        "treks": trek_count,
+        "bookings": book_count
+    })
+
+
+# Staff profile and password
+@app.route("/api/staff-detail", methods=["GET", "PUT"])
+@roles_required("staff")
+def staff_detail():
+    u = load_current_account()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    prof = StaffInfo.query.filter_by(user_id=u.id).first()
+    if request.method == "GET":
+        if not prof:
+            return jsonify({"error": "Staff profile not found"}), 404
+        return jsonify({
+            "name": u.name,
+            "email": u.email,
+            "mobile": u.mobile or "",
+            "experience": prof.exp_years or "",
+            "skills": prof.skills or "",
+            "information": prof.info or ""
+        })
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "json body required"}), 400
+    u.name = data.get("name", u.name)
+    u.mobile = data.get("mobile", u.mobile or "")
+    if prof:
+        prof.exp_years = data.get("experience", prof.exp_years or "")
+        prof.skills = data.get("skills", prof.skills or "")
+        prof.info = data.get("information", prof.info or "")
+    db.session.commit()
+    return jsonify({"message": "Profile updated"})
+
+
+@app.route("/api/staff-change-key", methods=["POST"])
+@roles_required("staff")
+def staff_change_key():
+    u = load_current_account()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "json body required"}), 400
+    old_pass = data.get("old_password", "")
+    new_pass = data.get("new_password", "")
+    if not old_pass or not new_pass:
+        return jsonify({"error": "Both old and new password required"}), 400
+    if len(new_pass) < 4:
+        return jsonify({"error": "New password must be at least 4 characters"}), 400
+    if not verify_password(old_pass, u.password):
+        return jsonify({"error": "Old password is incorrect"}), 403
+    u.password = hash_password(new_pass)
+    db.session.commit()
+    return jsonify({"message": "Password changed successfully"})
+
+
+# Trekker password change
+@app.route("/api/trekker/change-passcode", methods=["POST"])
+@roles_required("trekker")
+def trekker_change_passcode():
+    u = load_current_account()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "json body required"}), 400
+    old_pass = data.get("old_password", "")
+    new_pass = data.get("new_password", "")
+    if not old_pass or not new_pass:
+        return jsonify({"error": "Both old and new password required"}), 400
+    if len(new_pass) < 4:
+        return jsonify({"error": "New password must be at least 4 characters"}), 400
+    if not verify_password(old_pass, u.password):
+        return jsonify({"error": "Old password is incorrect"}), 403
+    u.password = hash_password(new_pass)
+    db.session.commit()
+    return jsonify({"message": "Password changed successfully"})
+
+
+# Test email endpoints
+@app.route("/api/probe-mail")
+def probe_mail():
+    from tasks import send_email
+    try:
+        admin_user = User.query.join(User.roles).filter(Role.name == "admin").first()
+        to_addr = admin_user.email if admin_user else Config.MAIL_USERNAME
+        send_email(to_addr, "Test from Trekking App", "This is a test email from the trekking application.")
+        return jsonify({"message": "Test email sent to " + to_addr})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/async-probe-mail")
+def async_probe_mail():
+    from tasks import send_async_test
+    job = send_async_test.delay()
+    return jsonify({"message": "Async test email queued", "task_id": job.id})
+
 
 # Task trigger endpoints
 @app.route("/api/tasks/trigger-reminder")
@@ -934,15 +1136,20 @@ def trigger_csv_export():
 @app.route("/api/tasks/status/<task_id>")
 def task_progress(task_id):
     job = AsyncResult(task_id, app=celery)
+    result = job.result
+    if not isinstance(result, (dict, list, str, int, float, bool, type(None))):
+        try:
+            result = str(result)
+        except Exception:
+            result = "unreadable result"
     return jsonify({
         "task_id": job.id,
         "state": job.state,
-        "result": job.result
+        "result": result
     })
 
 if __name__ == "__main__":
     with app.app_context():
-        from models import db, User, Role
         db.create_all()
 
         roles_list = ["admin", "staff", "trekker"]
@@ -966,4 +1173,46 @@ if __name__ == "__main__":
             user_store.add_role_to_user(admin_user, admin_role)
             db.session.commit()
             print("Default admin seeded: head@peakventure.com / peak@2026")
+
+        sample_staff_email = "guide@peakventure.com"
+        existing_guide = user_store.find_user(email=sample_staff_email)
+        if not existing_guide:
+            guide_user = user_store.create_user(
+                email=sample_staff_email,
+                password=hash_password("guide@2026"),
+                name="Arjun Rawat",
+                mobile="9988776655",
+                active=True
+            )
+            staff_role = user_store.find_role("staff")
+            user_store.add_role_to_user(guide_user, staff_role)
+            db.session.commit()
+
+            guide_profile = StaffInfo(
+                user_id=guide_user.id,
+                info="Experienced mountain guide from Uttarakhand",
+                exp_years="5",
+                skills="Rock Climbing, Navigation, First Aid"
+            )
+            db.session.add(guide_profile)
+            db.session.commit()
+            print("Demo guide seeded: guide@peakventure.com / guide@2026")
+
+        if Trek.query.count() == 0:
+            from datetime import timedelta
+            sample_trek = Trek(
+                title="Valley of Flowers Expedition",
+                place="Uttarakhand",
+                level="Moderate",
+                duration=6,
+                max_slots=15,
+                left_slots=15,
+                status="Open",
+                start_date=date.today() + timedelta(days=14),
+                end_date=date.today() + timedelta(days=20),
+                about="A breathtaking trek through the famous Valley of Flowers, a UNESCO World Heritage site. Experience alpine flowers, glaciers, and panoramic mountain views."
+            )
+            db.session.add(sample_trek)
+            db.session.commit()
+            print("Demo trek seeded: Valley of Flowers Expedition (Open, starting in 14 days)")
     app.run(debug=True)

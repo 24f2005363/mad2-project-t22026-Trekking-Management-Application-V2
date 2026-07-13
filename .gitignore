@@ -20,13 +20,3 @@ celerybeat-schedule
 # Frontend dependencies
 node_modules/
 dist/
-
-# IDE files
-.idea/
-.vscode/
-.gemini/
-unpacked_reference/
-trekking-app-mad2-wrong.zip
-
-# Agent config files
-.agents/

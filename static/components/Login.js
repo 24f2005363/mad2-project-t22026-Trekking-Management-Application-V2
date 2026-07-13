@@ -34,9 +34,8 @@ export default {
                 }
 
                 // Save credentials to local storage
-                localStorage.setItem("user-role", result.roles[0])
+                localStorage.setItem("user-role", result.roles[0] || "")
                 localStorage.setItem("user-name", result.name)
-                localStorage.setItem("user-id", result.user_id)
 
                 // Notify navbar of update
                 window.dispatchEvent(new Event("auth-changed"))
